@@ -1,0 +1,74 @@
+meta:
+  project: vessel_reproduction
+  version: 1
+  description: "Unsupervised multi-scale morphology vessel extraction"
+
+# 参数分类约定：
+# - algorithm: 直接影响分割算法行为与结果
+# - engineering: 影响 I/O、运行稳定性、可观测性与可复现性
+
+algorithm:
+  pyramid:
+    scales: [1.0, 0.5]
+
+  morphology:
+    num_directions: 9
+    line_length_per_scale: [6, 3]
+
+  illumination:
+    mean_filter_size_per_scale: [7, 5]
+    epsilon_c: 1.0
+
+  threshold:
+    method: adaptive_mean
+    adaptive_block_size: 21
+    adaptive_C: -2.0
+
+  postprocess:
+    area_min: 30
+
+  fusion:
+    method: pixel_or
+
+  preprocess:
+    invert_intensity: false
+
+engineering:
+  io:
+    input_dir: data
+    output_dir: outputs
+    input_glob: "*.png"
+    recursive: false
+
+  output:
+    save_mask: true
+    save_overlay: true
+    save_intermediate: false
+    intermediate_stages: ["illumination", "tophat_response", "threshold", "postprocess"]
+    snapshot_filename: run_config_snapshot.yaml
+    unsup_metrics_filename: metrics_unsup.csv
+
+  runtime:
+    num_workers: 0
+    batch_size: 1
+    device: cpu
+
+  robustness:
+    skip_on_error: true
+    max_errors: 50
+
+  logging:
+    level: INFO
+    log_to_file: true
+    log_filename: run.log
+
+snapshot:
+  include:
+    - meta
+    - algorithm
+    - engineering
+    - runtime_context
+    - param_taxonomy
+    - config_digest
+  redact_keys: []
+  format: yaml

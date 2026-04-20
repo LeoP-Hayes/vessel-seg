@@ -1,0 +1,38 @@
+meta:
+  run_id: TODO
+  created_at_utc: TODO
+  project_version: TODO
+
+algorithm: {}
+engineering: {}
+
+effective_params:
+  line_length_per_scale: TODO
+  mean_filter_size_per_scale: TODO
+  adaptive_block_size: TODO
+  adaptive_C: TODO
+  area_min: TODO
+
+artifacts:
+  masks_dir: TODO
+  overlays_dir: TODO
+  intermediate_dir: TODO
+  metrics_unsup_csv: TODO
+  review_list_csv: TODO
+  run_log: TODO
+
+quality_gate:
+  total_samples: TODO
+  ok_samples: TODO
+  failed_samples: TODO
+  anomaly_samples: TODO
+  outlier_rule: TODO
+
+digests:
+  config_digest: TODO
+  assumptions_digest: TODO
+  metrics_digest: TODO
+
+assumptions_ref:
+  file: ASSUMPTIONS.md
+  active_ids: TODO

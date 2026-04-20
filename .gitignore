@@ -1,0 +1,14 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Runtime artifacts
+outputs/
+
+# Private dataset: keep structure only
+/data/train/*
+!/data/train/.gitkeep
+/data/val/*
+!/data/val/.gitkeep
+/data/test/*
+!/data/test/.gitkeep
