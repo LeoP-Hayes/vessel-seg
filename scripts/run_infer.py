@@ -19,7 +19,11 @@ if str(SRC_DIR) not in sys.path:
 
 from vessel_reproduction.config_loader import export_config_snapshot, load_config
 from vessel_reproduction.data_manifest import DiscoverOptions, discover_samples, read_grayscale_image
-from vessel_reproduction.dual_scale_pipeline import DualScalePipelineParams, run_dual_scale_pipeline
+from vessel_reproduction.dual_scale_pipeline import (
+    DualScalePipelineParams,
+    run_dual_scale_pipeline,
+    run_triple_scale_pipeline,
+)
 from vessel_reproduction.notebook_debug import make_overlay
 from vessel_reproduction.single_scale_pipeline import PipelineDebugOptions, SingleScalePipelineParams, run_single_scale_pipeline
 from vessel_reproduction.unsupervised_metrics import (
@@ -69,7 +73,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--input_dir", type=str, default=None)
     parser.add_argument("--output_dir", type=str, default=None)
 
-    parser.add_argument("--pipeline", choices=["single", "dual"], default="dual")
+    parser.add_argument("--pipeline", choices=["single", "dual", "triple"], default="dual")
     parser.add_argument("--input_mode", choices=["auto", "single_dir", "split_dirs"], default="auto")
     parser.add_argument("--recursive", action="store_true")
 
@@ -211,11 +215,31 @@ def build_dual_scale_params_from_config(config: Any) -> DualScalePipelineParams:
     line_lengths = tuple(int(x) for x in algo.morphology.line_length_per_scale)
     mean_sizes = tuple(int(x) for x in algo.illumination.mean_filter_size_per_scale)
     base = build_single_scale_params_from_config(config)
+    if len(scales) < 2 or len(line_lengths) < 2 or len(mean_sizes) < 2:
+        raise ValueError("dual pipeline requires at least 2 scales/line lengths/mean filter sizes in config")
 
     return DualScalePipelineParams(
         scales=(scales[0], scales[1]),
         line_length_per_scale=(line_lengths[0], line_lengths[1]),
         mean_filter_size_per_scale=(mean_sizes[0], mean_sizes[1]),
+        base_single_scale=base,
+        output_mask_dtype="uint8",
+    )
+
+
+def build_triple_scale_params_from_config(config: Any) -> DualScalePipelineParams:
+    algo = config.algorithm
+    scales = tuple(float(x) for x in algo.pyramid.scales)
+    line_lengths = tuple(int(x) for x in algo.morphology.line_length_per_scale)
+    mean_sizes = tuple(int(x) for x in algo.illumination.mean_filter_size_per_scale)
+    base = build_single_scale_params_from_config(config)
+    if len(scales) < 3 or len(line_lengths) < 3 or len(mean_sizes) < 3:
+        raise ValueError("triple pipeline requires at least 3 scales/line lengths/mean filter sizes in config")
+
+    return DualScalePipelineParams(
+        scales=(scales[0], scales[1], scales[2]),
+        line_length_per_scale=(line_lengths[0], line_lengths[1], line_lengths[2]),
+        mean_filter_size_per_scale=(mean_sizes[0], mean_sizes[1], mean_sizes[2]),
         base_single_scale=base,
         output_mask_dtype="uint8",
     )
@@ -236,7 +260,7 @@ def process_one_sample(sample: Any, *, config: Any, args: argparse.Namespace, la
             ),
         )
         mask, intermediate = run_single_scale_pipeline(image, params_single)
-    else:
+    elif args.pipeline == "dual":
         params_dual = build_dual_scale_params_from_config(config)
         params_dual = replace(
             params_dual,
@@ -250,6 +274,20 @@ def process_one_sample(sample: Any, *, config: Any, args: argparse.Namespace, la
             ),
         )
         mask, intermediate = run_dual_scale_pipeline(image, params_dual)
+    else:
+        params_triple = build_triple_scale_params_from_config(config)
+        params_triple = replace(
+            params_triple,
+            base_single_scale=replace(
+                params_triple.base_single_scale,
+                debug=replace(
+                    params_triple.base_single_scale.debug,
+                    return_intermediate=bool(config.engineering.output.save_intermediate),
+                    include_directional=bool(args.save_directional),
+                ),
+            ),
+        )
+        mask, intermediate = run_triple_scale_pipeline(image, params_triple)
 
     overlay = make_overlay(image, mask)
 

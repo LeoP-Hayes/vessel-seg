@@ -16,18 +16,18 @@ class MetaConfig:
 
 @dataclass(frozen=True)
 class PyramidConfig:
-    scales: List[float] = field(default_factory=lambda: [1.0, 0.5])
+    scales: List[float] = field(default_factory=lambda: [1.0, 0.5, 0.25])
 
 
 @dataclass(frozen=True)
 class MorphologyConfig:
     num_directions: int = 9
-    line_length_per_scale: List[int] = field(default_factory=lambda: [6, 3])
+    line_length_per_scale: List[int] = field(default_factory=lambda: [6, 3, 2])
 
 
 @dataclass(frozen=True)
 class IlluminationConfig:
-    mean_filter_size_per_scale: List[int] = field(default_factory=lambda: [7, 5])
+    mean_filter_size_per_scale: List[int] = field(default_factory=lambda: [7, 5, 3])
     epsilon_c: float = 1.0
 
 

@@ -53,6 +53,10 @@ class TestRunInferInterfaces(unittest.TestCase):
         self.assertEqual(args.max_errors, 7)
         self.assertTrue(args.dry_run)
 
+    def test_parse_args_triple_pipeline(self) -> None:
+        args = run_infer.parse_args(["--pipeline", "triple"])
+        self.assertEqual(args.pipeline, "triple")
+
     def test_overrides_mapping(self) -> None:
         args = run_infer.parse_args(["--input_dir", "data", "--output_dir", "outputs", "--save_intermediate", "--max_errors", "8"])
         overrides = run_infer.to_overrides(args)

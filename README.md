@@ -2,7 +2,7 @@
 
 基于无监督形态学流程的 FFA（荧光素眼底血管造影）血管提取项目。
 
-本仓库已经实现从目录级数据读取到单/双尺度推理、结果导出、无监督统计与异常样本标记的完整 CLI 流程。
+本仓库已经实现从目录级数据读取到单/双/三尺度推理、结果导出、无监督统计与异常样本标记的完整 CLI 流程。
 
 ## 目录
 
@@ -32,6 +32,7 @@
 - 单图读取统一为灰度 `ndarray(H, W)`
 - 单尺度分割流水线（光照校正 -> 多方向改进 top-hat -> 自适应阈值 -> 面积去噪）
 - 双尺度推理与 OR 融合
+- 三尺度推理与 OR 融合
 - 批处理容错（跳过失败样本、错误上限）
 - 配置快照导出（含参数分类与 digest）
 
@@ -42,7 +43,7 @@ vessel_reproduction/
 ├── config/
 │   ├── default.yaml               # 默认配置
 │   └── final.yaml.template        # 最终参数固化模板
-├── data/                          # 输入数据（示例）
+├── data/                          # 仅保留目录结构占位（不含私有数据）
 ├── scripts/
 │   └── run_infer.py               # 端到端 CLI 入口
 ├── src/vessel_reproduction/
@@ -66,7 +67,7 @@ vessel_reproduction/
 - `illumination_correction.py`：执行均值滤波背景校正与归一化。
 - `multidirectional_tophat.py`：生成方向结构元素，计算方向响应并逐像素 `max` 融合。
 - `single_scale_pipeline.py`：单尺度全流程与中间结果组织。
-- `dual_scale_pipeline.py`：双尺度独立推理、上采样对齐、OR 融合。
+- `dual_scale_pipeline.py`：多尺度（含双/三尺度）独立推理、上采样对齐、OR 融合。
 - `unsupervised_metrics.py`：导出面积比、连通域、骨架等指标，并做 IQR/分位数异常标记。
 - `scripts/run_infer.py`：批处理主循环、日志、产物落盘、异常容错。
 
@@ -94,7 +95,7 @@ pip install matplotlib
 1. 单目录模式（`single_dir`）：
 
 ```text
-data/test/
+<your_data_dir>/
   0.png
   1.png
   ...
@@ -103,7 +104,7 @@ data/test/
 2. 划分目录模式（`split_dirs`）：
 
 ```text
-data/
+<your_data_dir>/
   train/*.png
   val/*.png
   test/*.png
@@ -111,14 +112,16 @@ data/
 
 `--input_mode auto` 会自动判断：若存在 `train/val/test` 目录则按 `split_dirs`，否则按 `single_dir`。
 
+> 注意：仓库中的 `data/` 目录仅保留结构占位（`train/val/test`），不包含真实图像文件。
+
 ## 6. 快速开始
 
-### 6.1 双尺度批处理（推荐）
+### 6.1 双尺度批处理
 
 ```bash
 python3 scripts/run_infer.py \
   --config config/default.yaml \
-  --input_dir data/test \
+  --input_dir <your_data_dir> \
   --output_dir outputs/run_dual \
   --pipeline dual \
   --input_mode single_dir \
@@ -132,12 +135,22 @@ python3 scripts/run_infer.py \
 ```bash
 python3 scripts/run_infer.py \
   --config config/default.yaml \
-  --input_dir data/test \
+  --input_dir <your_data_dir> \
   --output_dir outputs/run_single \
   --pipeline single
 ```
 
-### 6.3 仅检查配置与样本发现（不执行推理）
+### 6.3 三尺度批处理
+
+```bash
+python3 scripts/run_infer.py \
+  --config config/default.yaml \
+  --input_dir <your_data_dir> \
+  --output_dir outputs/run_triple \
+  --pipeline triple
+```
+
+### 6.4 仅检查配置与样本发现（不执行推理）
 
 ```bash
 python3 scripts/run_infer.py --config config/default.yaml --dry_run
@@ -152,7 +165,7 @@ python3 scripts/run_infer.py --config config/default.yaml --dry_run
 | `--config` | `str` | `config/default.yaml` | 任意可读 YAML 路径 | 主配置文件 |
 | `--input_dir` | `str` | `None` | 任意目录路径 | 覆盖 `engineering.io.input_dir` |
 | `--output_dir` | `str` | `None` | 任意输出目录路径 | 覆盖 `engineering.io.output_dir` |
-| `--pipeline` | `str` | `dual` | `single` / `dual` | 推理模式 |
+| `--pipeline` | `str` | `dual` | `single` / `dual` / `triple` | 推理模式 |
 | `--input_mode` | `str` | `auto` | `auto` / `single_dir` / `split_dirs` | 样本发现模式 |
 | `--recursive` | `flag` | `False` | 出现即启用 | 递归遍历目录；与配置 `io.recursive` 取 OR |
 | `--save_intermediate` | `flag` | `False` | 出现即启用 | 覆盖 `engineering.output.save_intermediate=true` |
@@ -206,6 +219,11 @@ python3 scripts/run_infer.py --max_errors 0
 - `algorithm.fusion.method`
 - `algorithm.preprocess.invert_intensity`
 
+默认三尺度基线（可改）：
+- `scales: [1.0, 0.5, 0.25]`
+- `line_length_per_scale: [6, 3, 2]`
+- `mean_filter_size_per_scale: [7, 5, 3]`
+
 ### 8.3 工程参数（`engineering.*`）
 
 - 输入输出：`engineering.io.*`
@@ -252,7 +270,13 @@ outputs/run_dual/
 2. `s1` 结果最近邻上采样并对齐到原图尺寸
 3. 两尺度二值结果执行逐像素 OR 融合
 
-### 10.3 无监督质检
+### 10.3 三尺度
+
+1. 在 `s0=1.0`、`s1`、`s2` 三个分辨率独立执行单尺度流程
+2. 将 `s1/s2` 结果最近邻上采样到原图尺寸
+3. 三尺度掩码逐像素 OR 融合输出
+
+### 10.4 无监督质检
 
 - 指标：面积比、连通域数量、最大连通域占比、骨架长度、分叉点/端点等
 - 规则：优先 IQR，样本不足或 IQR 退化时回退分位数阈值
@@ -269,7 +293,7 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v
 建议在改动核心算法后至少执行：
 
 1. 全量单元测试
-2. 一次 `data/test` 端到端推理
+2. 一次自备数据目录端到端推理
 3. 人工检查 `overlays/` 与 `review_list.csv`
 
 ## 12. 已知限制与后续扩展

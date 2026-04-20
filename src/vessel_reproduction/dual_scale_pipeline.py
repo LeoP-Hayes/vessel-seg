@@ -30,9 +30,9 @@ class MultiScaleDebugOptions:
 
 @dataclass(frozen=True)
 class DualScalePipelineParams:
-    scales: tuple[float, float] = (1.0, 0.5)
-    line_length_per_scale: tuple[int, int] = (6, 3)
-    mean_filter_size_per_scale: tuple[int, int] = (7, 5)
+    scales: tuple[float, ...] = (1.0, 0.5)
+    line_length_per_scale: tuple[int, ...] = (6, 3)
+    mean_filter_size_per_scale: tuple[int, ...] = (7, 5)
     base_single_scale: SingleScalePipelineParams = field(default_factory=SingleScalePipelineParams)
     align: AlignOptions = field(default_factory=AlignOptions)
     debug: MultiScaleDebugOptions = field(default_factory=MultiScaleDebugOptions)
@@ -57,12 +57,15 @@ def validate_dual_scale_input(image: np.ndarray) -> None:
 
 
 def validate_dual_scale_params(params: DualScalePipelineParams) -> None:
-    if len(params.scales) != 2:
-        raise DualScaleConfigError("scales must contain exactly 2 values")
+    if len(params.scales) < 2:
+        raise DualScaleConfigError("scales must contain at least 2 values")
     if params.scales[0] != 1.0:
         raise DualScaleConfigError("the first scale must be 1.0 for reference size")
-    if params.scales[1] <= 0.0 or params.scales[1] >= 1.0:
-        raise DualScaleConfigError("the second scale must be in (0, 1)")
+    for idx, scale in enumerate(params.scales[1:], start=1):
+        if scale <= 0.0 or scale >= 1.0:
+            raise DualScaleConfigError(f"scale at index {idx} must be in (0, 1)")
+        if scale >= params.scales[idx - 1]:
+            raise DualScaleConfigError("scales must be strictly descending after 1.0")
 
     if len(params.line_length_per_scale) != len(params.scales):
         raise DualScaleConfigError("line_length_per_scale length must match scales")
@@ -178,64 +181,107 @@ def fuse_masks_or(mask_s0: np.ndarray, mask_s1_up: np.ndarray, *, output_dtype: 
     raise DualScaleConfigError("invalid output_dtype")
 
 
+def fuse_masks_or_many(masks: list[np.ndarray], *, output_dtype: MaskDType = "uint8") -> np.ndarray:
+    """多尺度逐像素 OR 融合。"""
+    if len(masks) == 0:
+        raise DualScaleInputError("masks must be non-empty")
+
+    first_shape = masks[0].shape
+    fused = np.zeros(first_shape, dtype=bool)
+    for idx, mask in enumerate(masks):
+        validate_dual_scale_input(mask)
+        if mask.shape != first_shape:
+            raise DualScaleInputError(f"mask shape mismatch at index {idx}")
+        fused = np.logical_or(fused, mask > 0)
+
+    if output_dtype == "bool":
+        return fused.astype(bool)
+    if output_dtype == "uint8":
+        return fused.astype(np.uint8)
+    raise DualScaleConfigError("invalid output_dtype")
+
+
 def run_dual_scale_pipeline(
     image: np.ndarray,
     params: DualScalePipelineParams,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """双尺度推理主入口。"""
+    if len(params.scales) != 2:
+        raise DualScaleConfigError("run_dual_scale_pipeline expects exactly 2 scales")
+    return _run_multi_scale_pipeline(image, params)
+
+
+def run_triple_scale_pipeline(
+    image: np.ndarray,
+    params: DualScalePipelineParams,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """三尺度推理主入口。"""
+    if len(params.scales) != 3:
+        raise DualScaleConfigError("run_triple_scale_pipeline expects exactly 3 scales")
+    return _run_multi_scale_pipeline(image, params)
+
+
+def _run_multi_scale_pipeline(
+    image: np.ndarray,
+    params: DualScalePipelineParams,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """多尺度推理核心实现。"""
     validate_dual_scale_input(image)
     validate_dual_scale_params(params)
 
     h, w = image.shape
-    _scale0, scale1 = params.scales
-
     intermediate: dict[str, Any] = {
         "input": image,
-        "scale_inputs": {"s0": image, "s1": None},
-        "scale_results": {"s0": None, "s1": None},
-        "aligned_masks": {"s0": None, "s1_up": None},
+        "scale_inputs": {},
+        "scale_results": {},
+        "aligned_masks": {},
         "fused_or": None,
         "meta": {
             "scales": params.scales,
+            "num_scales": len(params.scales),
             "interp_down": params.align.downsample_interpolation,
             "interp_up_binary": params.align.upsample_binary_interpolation,
             "binarize_after_upsample": params.align.binarize_after_upsample,
         },
     }
+    aligned_masks: list[np.ndarray] = []
+    for idx, scale in enumerate(params.scales):
+        key = f"s{idx}"
+        if idx == 0:
+            image_level = image
+        else:
+            image_level = downsample_image(
+                image,
+                scale=scale,
+                interpolation=params.align.downsample_interpolation,
+            )
+        intermediate["scale_inputs"][key] = image_level
 
-    image_s1 = downsample_image(image, scale=scale1, interpolation=params.align.downsample_interpolation)
-    intermediate["scale_inputs"]["s1"] = image_s1
+        level_params = build_single_scale_params_for_level(
+            params.base_single_scale,
+            line_length=params.line_length_per_scale[idx],
+            mean_filter_size=params.mean_filter_size_per_scale[idx],
+        )
+        mask_level, inter_level = run_single_scale_pipeline(image_level, level_params)
+        intermediate["scale_results"][key] = {"mask": mask_level, "details": inter_level}
 
-    p0 = build_single_scale_params_for_level(
-        params.base_single_scale,
-        line_length=params.line_length_per_scale[0],
-        mean_filter_size=params.mean_filter_size_per_scale[0],
-    )
-    p1 = build_single_scale_params_for_level(
-        params.base_single_scale,
-        line_length=params.line_length_per_scale[1],
-        mean_filter_size=params.mean_filter_size_per_scale[1],
-    )
+        if idx == 0:
+            aligned_mask = mask_level
+            aligned_key = key
+        else:
+            aligned_mask = upsample_binary_mask_to_shape(
+                mask_level,
+                target_shape=(h, w),
+                interpolation=params.align.upsample_binary_interpolation,
+                binarize_after_upsample=params.align.binarize_after_upsample,
+                binary_threshold=params.align.binary_threshold,
+                output_dtype=params.output_mask_dtype,
+            )
+            aligned_key = f"{key}_up"
+        intermediate["aligned_masks"][aligned_key] = aligned_mask
+        aligned_masks.append(aligned_mask)
 
-    mask_s0, inter_s0 = run_single_scale_pipeline(image, p0)
-    mask_s1, inter_s1 = run_single_scale_pipeline(image_s1, p1)
-
-    intermediate["scale_results"]["s0"] = {"mask": mask_s0, "details": inter_s0}
-    intermediate["scale_results"]["s1"] = {"mask": mask_s1, "details": inter_s1}
-
-    mask_s1_up = upsample_binary_mask_to_shape(
-        mask_s1,
-        target_shape=(h, w),
-        interpolation=params.align.upsample_binary_interpolation,
-        binarize_after_upsample=params.align.binarize_after_upsample,
-        binary_threshold=params.align.binary_threshold,
-        output_dtype=params.output_mask_dtype,
-    )
-
-    intermediate["aligned_masks"]["s0"] = mask_s0
-    intermediate["aligned_masks"]["s1_up"] = mask_s1_up
-
-    fused = fuse_masks_or(mask_s0, mask_s1_up, output_dtype=params.output_mask_dtype)
+    fused = fuse_masks_or_many(aligned_masks, output_dtype=params.output_mask_dtype)
     intermediate["fused_or"] = fused
 
     if not params.debug.return_intermediate:

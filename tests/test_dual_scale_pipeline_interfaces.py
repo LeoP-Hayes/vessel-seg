@@ -31,7 +31,9 @@ class TestDualScalePipelineInterfaces(unittest.TestCase):
             "downsample_image",
             "upsample_binary_mask_to_shape",
             "fuse_masks_or",
+            "fuse_masks_or_many",
             "run_dual_scale_pipeline",
+            "run_triple_scale_pipeline",
         }
         for name in names:
             self.assertTrue(hasattr(vr, name), f"missing export: {name}")
@@ -56,6 +58,18 @@ class TestDualScalePipelineInterfaces(unittest.TestCase):
         mask, inter = dp.run_dual_scale_pipeline(image, params)
         self.assertEqual(mask.shape, image.shape)
         self.assertIn("fused_or", inter)
+
+    def test_run_triple_scale_pipeline(self) -> None:
+        image = np.random.randint(0, 256, (64, 64), dtype=np.uint8)
+        params = dp.DualScalePipelineParams(
+            scales=(1.0, 0.5, 0.25),
+            line_length_per_scale=(6, 3, 2),
+            mean_filter_size_per_scale=(7, 5, 3),
+        )
+        mask, inter = dp.run_triple_scale_pipeline(image, params)
+        self.assertEqual(mask.shape, image.shape)
+        self.assertIn("s2", inter["scale_inputs"])
+        self.assertIn("s2_up", inter["aligned_masks"])
 
     def test_main_signature(self) -> None:
         sig = inspect.signature(dp.run_dual_scale_pipeline)

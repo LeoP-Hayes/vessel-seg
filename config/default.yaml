@@ -9,14 +9,14 @@ meta:
 
 algorithm:
   pyramid:
-    scales: [1.0, 0.5]
+    scales: [1.0, 0.5, 0.25]
 
   morphology:
     num_directions: 9
-    line_length_per_scale: [6, 3]
+    line_length_per_scale: [6, 3, 2]
 
   illumination:
-    mean_filter_size_per_scale: [7, 5]
+    mean_filter_size_per_scale: [7, 5, 3]
     epsilon_c: 1.0
 
   threshold:

@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import dataclasses
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from typing import get_args
+
+import cv2
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT / "src"
@@ -16,8 +20,18 @@ from vessel_reproduction import data_manifest as dm
 
 class TestDataManifestInterface(unittest.TestCase):
     def setUp(self) -> None:
-        self.data_dir = ROOT / "data"
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.data_dir = Path(self.tmpdir.name) / "data"
+        for split in ("train", "val", "test"):
+            split_dir = self.data_dir / split
+            split_dir.mkdir(parents=True, exist_ok=True)
+            for idx in range(2):
+                img = np.full((32, 32), idx * 40 + 60, dtype=np.uint8)
+                cv2.imwrite(str(split_dir / f"{idx}.png"), img)
         self.sample_path = self.data_dir / "test" / "0.png"
+
+    def tearDown(self) -> None:
+        self.tmpdir.cleanup()
 
     def test_manifest_fields_match_dataclass(self) -> None:
         expected = tuple(field.name for field in dataclasses.fields(dm.ManifestRecord))
