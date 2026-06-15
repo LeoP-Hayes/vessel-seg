@@ -34,6 +34,7 @@
 - 双尺度推理与 OR 融合
 - 三尺度推理与 OR 融合
 - 批处理容错（跳过失败样本、错误上限）
+- Python API：`extract_vessel_mask`（单图）/ `extract_vessel_masks_batch`（批量）
 - 配置快照导出（含参数分类与 digest）
 
 ## 3. 项目结构与模块职责
@@ -53,7 +54,8 @@ vessel_reproduction/
 │   ├── illumination_correction.py # 光照校正 Ieq = Is/(mean+c)
 │   ├── multidirectional_tophat.py # 多方向改进 top-hat
 │   ├── single_scale_pipeline.py   # 单尺度流程
-│   ├── dual_scale_pipeline.py     # 双尺度流程
+│   ├── dual_scale_pipeline.py     # 多尺度流程（双/三尺度 OR 融合）
+│   ├── api.py                     # 高层 Python API：单图/批量提取接口
 │   ├── unsupervised_metrics.py    # 无监督统计 + 异常标记
 │   └── notebook_debug.py          # Notebook 可视化接口（部分占位）
 └── tests/                         # 单元测试
@@ -68,6 +70,7 @@ vessel_reproduction/
 - `multidirectional_tophat.py`：生成方向结构元素，计算方向响应并逐像素 `max` 融合。
 - `single_scale_pipeline.py`：单尺度全流程与中间结果组织。
 - `dual_scale_pipeline.py`：多尺度（含双/三尺度）独立推理、上采样对齐、OR 融合。
+- `api.py`：高层 Python 调用接口（`extract_vessel_mask` / `extract_vessel_masks_batch`），封装配置解析与管道调度。
 - `unsupervised_metrics.py`：导出面积比、连通域、骨架等指标，并做 IQR/分位数异常标记。
 - `scripts/run_infer.py`：批处理主循环、日志、产物落盘、异常容错。
 
@@ -80,6 +83,12 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
 pip install numpy opencv-python pyyaml
+```
+
+如需将本仓库作为可复用库安装（推荐给其他工程调用）：
+
+```bash
+pip install -e .
 ```
 
 如果用于 Notebook 展示，可按需安装：
@@ -105,14 +114,37 @@ pip install matplotlib
 
 ```text
 <your_data_dir>/
-  train/*.png
-  val/*.png
-  test/*.png
+  train/
+    A/*.png          # 原始图像（或任意子目录名）
+    B/*.png
+  val/
+    A/*.png
+    B/*.png
+  test/
+    A/*.png
+    B/*.png
 ```
+
+> **注意**：
+> - `--input_mode split_dirs` 会识别 `train/val/test` 一级目录，默认只在各 split 的根目录下查找图像文件。
+> - 当图像文件位于更深层子目录（如 `train/B/`、`train/A/`）时，需配合 `--recursive` 递归遍历。
+> - 当通过 Python API `extract_vessel_masks_batch` 调用时，可使用 `image_subdir` 参数（如 `"B"`）直接定位到具体子目录，无需递归。
 
 `--input_mode auto` 会自动判断：若存在 `train/val/test` 目录则按 `split_dirs`，否则按 `single_dir`。
 
 > 注意：仓库中的 `data/` 目录仅保留结构占位（`train/val/test`），不包含真实图像文件。
+
+### 5.1 图像格式与尺寸要求
+
+| 项目 | 说明 |
+|------|------|
+| 支持格式 | `.png` / `.jpg` / `.jpeg` / `.tif` / `.tiff` / `.bmp` |
+| 通道要求 | 任何通道数均可输入（自动转为灰度单通道 `(H, W)`） |
+| 尺寸要求 | **无固定尺寸限制**，任意 `H×W` 均可（已测试 64×64 ~ 1024×1024） |
+| 最小尺寸 | `min(H, W)` 必须大于 `algorithm.threshold.adaptive_block_size`（默认 21），否则自适应阈值会报错。极小图片（如 32×32 以下）可调小该值（必须为 ≥3 的奇数） |
+| 超大图片 | 图片 ≥1024 时建议适当增大 `line_length_per_scale` 和 `mean_filter_size_per_scale`，否则血管相对尺寸变小、检测效果偏弱（详见 [8.2 算法参数](#82-算法参数algorithm)） |
+
+> **设计说明**：整个流水线对图像尺寸无硬编码假设。光照校正是逐像素除法，Top-Hat 是形态学滑窗，自适应阈值按局部邻域计算，面积去噪按连通域面积过滤——均为尺寸无关操作。多尺度流程中的下采样通过 `cv2.INTER_AREA` 自动适配任意尺寸。
 
 ## 6. 快速开始
 
@@ -156,6 +188,26 @@ python3 scripts/run_infer.py \
 python3 scripts/run_infer.py --config config/default.yaml --dry_run
 ```
 
+### 6.5 作为 Python 库直接调用
+
+```python
+import cv2
+from vessel_reproduction import extract_vessel_mask, extract_vessel_masks_batch
+
+img = cv2.imread("example.png", cv2.IMREAD_GRAYSCALE)
+mask = extract_vessel_mask(img, pipeline="dual", config_path="config/default.yaml")
+
+summary = extract_vessel_masks_batch(
+    input_dir="data",
+    output_dir="outputs/masks",
+    split_mode="train_val_test",
+    image_subdir="B",
+    output_subdir="B_mask",
+    pipeline="dual",
+)
+print(summary)
+```
+
 ## 7. CLI 详解（合法 options 全量）
 
 入口脚本：`scripts/run_infer.py`
@@ -177,10 +229,10 @@ python3 scripts/run_infer.py --config config/default.yaml --dry_run
 
 ### 7.1 常见组合示例
 
-1. 强制按 `train/val/test` 读取：
+1. 强制按 `train/val/test` 读取（若图像在深层子目录需加 `--recursive`）：
 
 ```bash
-python3 scripts/run_infer.py --input_mode split_dirs
+python3 scripts/run_infer.py --input_mode split_dirs --recursive
 ```
 
 2. 单目录 + 保存中间结果：
@@ -223,6 +275,19 @@ python3 scripts/run_infer.py --max_errors 0
 - `scales: [1.0, 0.5, 0.25]`
 - `line_length_per_scale: [6, 3, 2]`
 - `mean_filter_size_per_scale: [7, 5, 3]`
+
+#### 参数与图像尺寸的关系
+
+默认参数以 512×512 左右的 FFA 图像为基准调优。若使用**显著不同的图像尺寸**，建议按比例缩放以下参数：
+
+| 参数 | 作用 | 小图（≤256） | 大图（≥1024） |
+|------|------|-------------|-------------|
+| `adaptive_block_size` | 自适应阈值局部窗口 | 减小（如 11~15） | 增大（如 31~51） |
+| `line_length_per_scale` | 形态学结构元素长度 | 减小（如 `[4,2,1]`） | 增大（如 `[12,6,4]`） |
+| `mean_filter_size_per_scale` | 光照校正均值滤波窗口 | 减小（如 `[5,3,3]`） | 增大（如 `[15,7,5]`） |
+| `area_min` | 去噪最小连通域面积 | 减小 | 增大 |
+
+> **经验法则**：`line_length` 和 `mean_filter_size` 大致与图像尺寸成比例缩放；`adaptive_block_size` 约为 `min(H,W)/25`（向上取奇数）；`area_min` 与图像总像素数成比例。
 
 ### 8.3 工程参数（`engineering.*`）
 
@@ -300,7 +365,7 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v
 
 ### 当前限制
 
-- `notebook_debug.py` 中部分展示函数仍为接口占位（不影响 CLI 主流程）。
+- `notebook_debug.py` 中除 `make_overlay` 外的展示函数仍为接口占位（不影响 CLI 主流程）。
 - 暂未集成 ROI 裁剪与视盘/背景先验。
 - `input_glob` 仅对简单 `*.ext` 形式做严格后缀提取。
 

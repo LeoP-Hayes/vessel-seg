@@ -1,5 +1,6 @@
 from .config_loader import export_config_snapshot, load_config
 from .config_schema import AppConfig, PARAM_TAXONOMY
+from .api import BatchExtractionSummary, extract_vessel_mask, extract_vessel_masks_batch
 from .data_manifest import (
     BatchSummary,
     DataPipelineError,
@@ -111,6 +112,9 @@ __all__ = [
     "PARAM_TAXONOMY",
     "load_config",
     "export_config_snapshot",
+    "BatchExtractionSummary",
+    "extract_vessel_mask",
+    "extract_vessel_masks_batch",
     "ReadImageOptions",
     "ReadImageMeta",
     "DiscoverOptions",

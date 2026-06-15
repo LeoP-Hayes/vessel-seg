@@ -5,4 +5,8 @@ __pycache__/
 # Runtime artifacts
 outputs/
 
-data
+# Private dataset
+data/
+
+# macOS
+.DS_Store
